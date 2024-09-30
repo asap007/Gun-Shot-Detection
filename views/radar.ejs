@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Advanced Gunshot Detection Radar</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); opacity: 0.7; }
+      50% { transform: scale(1.05); opacity: 1; }
+    }
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+    .processing-dot {
+      animation: blink 0.5s infinite;
+    }
+    .glow {
+      box-shadow: 0 0 10px #ff0000, 0 0 20px #ff0000, 0 0 30px #ff0000, 0 0 40px #ff0000;
+    }
+  </style>
+</head>
+<body class="bg-gray-900 min-h-screen p-4">
+  <div class="container mx-auto">
+    <h1 class="text-4xl font-bold text-red-500 mb-8 text-center">Advanced Gunshot Detection Radar</h1>
+    
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+      <!-- Radar Section -->
+      <div class="bg-gray-800 p-6 rounded-lg shadow-lg">
+        <div class="relative">
+          <canvas id="radarCanvas" width="600" height="600" class="bg-black rounded-full shadow-lg shadow-red-500/50 mx-auto"></canvas>
+          <div id="alertRing" class="absolute inset-0 border-4 border-red-500 rounded-full opacity-0 transition-opacity duration-300"></div>
+        </div>
+        <div class="mt-4 text-red-300 font-mono text-sm text-center">
+          <p id="statusText" class="text-xl">System Active - Monitoring</p>
+          <p id="frequencyText" class="mt-2"></p>
+          <p id="processingText" class="mt-2 hidden">Processing<span class="processing-dot">.</span><span class="processing-dot">.</span><span class="processing-dot">.</span></p>
+        </div>
+      </div>
+
+      <!-- Chart and Controls Section -->
+      <div class="flex flex-col">
+        <div class="bg-gray-800 p-6 rounded-lg shadow-lg mb-4">
+          <h2 class="text-xl font-bold text-white mb-4">Frequency Analysis</h2>
+          <canvas id="frequencyChart"></canvas>
+        </div>
+        <div class="bg-gray-800 p-6 rounded-lg shadow-lg">
+          <h2 class="text-xl font-bold text-white mb-4">Controls</h2>
+          <div class="flex gap-4 justify-center">
+            <button id="detectButton" class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded transition-all duration-300 ease-in-out transform hover:scale-105">
+              Detect Gunshot
+            </button>
+            <button id="toggleAutoDetect" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded transition-all duration-300 ease-in-out transform hover:scale-105">
+              Enable Auto-Detect
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Detection Log Section -->
+    <div class="mt-8 bg-gray-800 rounded-lg p-6 shadow-lg">
+      <h2 class="text-2xl font-bold text-white mb-4">Detection Log</h2>
+      <div id="detectionLog" class="overflow-y-auto h-48">
+        <ul id="logList" class="text-gray-300"></ul>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('radarCanvas');
+    const ctx = canvas.getContext('2d');
+    const alertRing = document.getElementById('alertRing');
+    const statusText = document.getElementById('statusText');
+    const frequencyText = document.getElementById('frequencyText');
+    const processingText = document.getElementById('processingText');
+    const detectButton = document.getElementById('detectButton');
+    const toggleAutoDetect = document.getElementById('toggleAutoDetect');
+    const logList = document.getElementById('logList');
+  
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    const radarRadius = 270;
+  
+    const directions = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+  
+    let detectionPoints = [];
+    let sweepAngle = 0;
+    let isProcessing = false;
+    let autoDetectEnabled = false;
+    let autoDetectInterval;
+  
+    // Initialize frequency chart
+    const frequencyChartCtx = document.getElementById('frequencyChart').getContext('2d');
+    const frequencyChart = new Chart(frequencyChartCtx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [{
+          label: 'Gunshot Frequency',
+          data: [],
+          borderColor: 'rgb(255, 99, 132)',
+          tension: 0.1
+        }]
+      },
+      options: {
+        responsive: true,
+        scales: {
+          y: {
+            beginAtZero: true,
+            title: {
+              display: true,
+              text: 'Frequency (Hz)'
+            }
+          },
+          x: {
+            title: {
+              display: true,
+              text: 'Detection #'
+            }
+          }
+        }
+      }
+    });
+  
+    function directionToAngle(direction) {
+      const index = directions.indexOf(direction);
+      if (index === -1) return 0;
+      return (Math.PI / 2 - index * Math.PI / 8 + 2 * Math.PI) % (2 * Math.PI);
+    }
+  
+    function drawRipples(x, y, time) {
+      const maxRadius = 50;
+      const duration = 2000;
+      const elapsedTime = Date.now() - time;
+      const progress = Math.min(elapsedTime / duration, 1);
+      
+      const numRipples = 3;
+      for (let i = 0; i < numRipples; i++) {
+        const rippleProgress = (progress + i / numRipples) % 1;
+        const radius = rippleProgress * maxRadius;
+        const alpha = 1 - rippleProgress;
+        
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, 2 * Math.PI);
+        ctx.strokeStyle = `rgba(255, 255, 0, ${alpha})`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+    }
+  
+    function drawRadar() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+  
+      // Draw concentric circles
+      for (let i = 1; i <= 4; i++) {
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radarRadius * i / 4, 0, 2 * Math.PI);
+        ctx.strokeStyle = `rgba(220, 38, 38, ${0.2 * i})`;
+        ctx.stroke();
+      }
+  
+      // Draw direction lines and labels
+      for (let i = 0; i < 16; i++) {
+        const angle = Math.PI / 2 - i * Math.PI / 8;
+        const x = centerX + radarRadius * Math.cos(angle);
+        const y = centerY - radarRadius * Math.sin(angle);
+  
+        ctx.beginPath();
+        ctx.moveTo(centerX, centerY);
+        ctx.lineTo(x, y);
+        ctx.strokeStyle = 'rgba(220, 38, 38, 0.5)';
+        ctx.stroke();
+  
+        const labelX = centerX + (radarRadius + 20) * Math.cos(angle);
+        const labelY = centerY - (radarRadius + 20) * Math.sin(angle);
+        ctx.fillStyle = 'rgb(248, 113, 113)';
+        ctx.font = '12px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(directions[i], labelX, labelY);
+      }
+  
+      // Draw sweep
+      ctx.beginPath();
+      ctx.moveTo(centerX, centerY);
+      ctx.arc(centerX, centerY, radarRadius, sweepAngle - 0.2, sweepAngle);
+      ctx.lineTo(centerX, centerY);
+      ctx.fillStyle = 'rgba(0, 255, 0, 0.1)';
+      ctx.fill();
+  
+      // Draw detection points with ripples
+      detectionPoints.forEach(point => {
+        drawRipples(point.x, point.y, point.time);
+  
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, 5, 0, 2 * Math.PI);
+        ctx.fillStyle = 'yellow';
+        ctx.fill();
+      });
+    }
+  
+    async function detectGunshot() {
+      if (isProcessing) return;
+  
+      isProcessing = true;
+      detectButton.disabled = true;
+      detectButton.classList.add('opacity-50', 'cursor-not-allowed');
+      processingText.classList.remove('hidden');
+  
+      // Simulate processing time
+      await new Promise(resolve => setTimeout(resolve, 2500));
+  
+      // Simulate API call
+      const data = {
+        calculated_absolute_direction: directions[Math.floor(Math.random() * directions.length)],
+        frequency: Math.random() * 1000 + 500
+      };
+  
+      processingText.classList.add('hidden');
+      isProcessing = false;
+  
+      const distance = Math.random() * radarRadius * 0.8 + radarRadius * 0.2;
+      const direction = data.calculated_absolute_direction;
+      const angle = directionToAngle(direction);
+      
+      const x = centerX + distance * Math.cos(angle);
+      const y = centerY - distance * Math.sin(angle);
+  
+      detectionPoints.unshift({ direction: direction, distance: distance, time: Date.now(), x: x, y: y });
+      if (detectionPoints.length > 5) {
+        detectionPoints.pop();
+      }
+  
+      // Animate alert ring
+      alertRing.style.opacity = '1';
+      alertRing.style.animation = 'pulse 0.5s ease-in-out infinite';
+  
+      // Update status text
+      statusText.textContent = `ALERT: Gunshot Detected! Direction: ${direction}`;
+      statusText.classList.add('text-yellow-300', 'font-bold', 'text-xl', 'glow');
+      statusText.style.animation = 'blink 0.5s ease-in-out infinite';
+  
+      // Update frequency text
+      frequencyText.textContent = `Frequency: ${data.frequency.toFixed(2)} Hz`;
+      frequencyText.classList.add('text-yellow-300');
+  
+      // Update frequency chart
+      updateFrequencyChart(data.frequency);
+  
+      // Add to detection log
+      addToDetectionLog(direction, data.frequency);
+  
+      // Reset after 5 seconds
+      setTimeout(() => {
+        alertRing.style.opacity = '0';
+        alertRing.style.animation = 'none';
+        statusText.textContent = 'System Active - Monitoring';
+        statusText.classList.remove('text-yellow-300', 'font-bold', 'text-xl', 'glow');
+        statusText.style.animation = 'none';
+        frequencyText.textContent = '';
+        frequencyText.classList.remove('text-yellow-300');
+  
+        // Re-enable the button
+        detectButton.disabled = false;
+        detectButton.classList.remove('opacity-50', 'cursor-not-allowed');
+      }, 5000);
+    }
+  
+    function updateFrequencyChart(frequency) {
+      frequencyChart.data.labels.push(frequencyChart.data.labels.length + 1);
+      frequencyChart.data.datasets[0].data.push(frequency);
+      if (frequencyChart.data.labels.length > 10) {
+        frequencyChart.data.labels.shift();
+        frequencyChart.data.datasets[0].data.shift();
+      }
+      frequencyChart.update();
+    }
+  
+    function addToDetectionLog(direction, frequency) {
+      const li = document.createElement('li');
+      li.textContent = `${new Date().toLocaleTimeString()} - Direction: ${direction}, Frequency: ${frequency.toFixed(2)} Hz`;
+      logList.prepend(li);
+      if (logList.children.length > 10) {
+        logList.lastElementChild.remove();
+      }
+    }
+  
+    function toggleAutoDetection() {
+      autoDetectEnabled = !autoDetectEnabled;
+      if (autoDetectEnabled) {
+        toggleAutoDetect.textContent = 'Disable Auto-Detect';
+        toggleAutoDetect.classList.remove('bg-blue-500', 'hover:bg-blue-600');
+        toggleAutoDetect.classList.add('bg-red-500', 'hover:bg-red-600');
+        autoDetectInterval = setInterval(detectGunshot, 10000); // Auto-detect every 10 seconds
+      } else {
+        toggleAutoDetect.textContent = 'Enable Auto-Detect';
+        toggleAutoDetect.classList.remove('bg-red-500', 'hover:bg-red-600');
+        toggleAutoDetect.classList.add('bg-blue-500', 'hover:bg-blue-600');
+        clearInterval(autoDetectInterval);
+      }
+    }
+  
+    function animate() {
+      drawRadar();
+      sweepAngle = (sweepAngle + 0.03) % (2 * Math.PI);
+      requestAnimationFrame(animate);
+    }
+  
+    detectButton.addEventListener('click', detectGunshot);
+    toggleAutoDetect.addEventListener('click', toggleAutoDetection);
+    animate();
+  </script>
+</body>
+</html>
